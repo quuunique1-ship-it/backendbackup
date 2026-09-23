@@ -19,7 +19,7 @@ export class TypeOrmTaskRepository implements TaskRepositoryInterface {
 
     const savedModel = await this.ormRepository.save(model);
 
-    return new Task(
+    return Task.fromPersistence(
       savedModel.id,
       savedModel.title,
       savedModel.completed,
@@ -44,7 +44,7 @@ export class TypeOrmTaskRepository implements TaskRepositoryInterface {
     });
 
     return models.map(
-      (m) => new Task(m.id, m.title, m.completed, m.createdAt, m.ownerId, m.createdByUserId, m.completedByUserId)
+      (m) => Task.fromPersistence(m.id, m.title, m.completed, m.createdAt, m.ownerId, m.createdByUserId, m.completedByUserId)
     );
   }
 
@@ -52,7 +52,7 @@ export class TypeOrmTaskRepository implements TaskRepositoryInterface {
     const model = await this.ormRepository.findOneBy({ id });
     if (!model) return null;
 
-    return new Task(model.id, model.title, model.completed, model.createdAt, model.ownerId, model.createdByUserId, model.completedByUserId);
+    return Task.fromPersistence(model.id, model.title, model.completed, model.createdAt, model.ownerId, model.createdByUserId, model.completedByUserId);
   }
 
   async update(task: Task): Promise<Task> {

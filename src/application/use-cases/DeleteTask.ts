@@ -1,9 +1,13 @@
 import { TaskRepositoryInterface } from "../../domain/repositories/TaskRepositoryInterface";
 import { User } from "../../domain/entities/User";
 import { AppError } from "../../domain/errors/AppError";
+import { TaskDeletionPolicy } from "../../domain/policies/TaskDeletionPolicy";
 
 export class DeleteTask {
-  constructor(private taskRepository: TaskRepositoryInterface) {}
+  constructor(
+    private taskRepository: TaskRepositoryInterface,
+    private taskDeletionPolicy: TaskDeletionPolicy
+  ) {}
 
   async execute(id: string, actor: User): Promise<void> {
     const task = await this.taskRepository.findById(id);
@@ -11,9 +15,11 @@ export class DeleteTask {
       throw new Error("Task not found");
     }
 
-    if (actor.role !== "admin" && task.ownerId !== actor.id) {
-      throw new AppError(403, "You can only delete your own tasks");
+    const denial = this.taskDeletionPolicy.canDelete(task, actor);
+    if (denial) {
+      throw denial;
     }
+
     await this.taskRepository.delete(id);
   }
 }

@@ -45,13 +45,7 @@ export class TaskController {
       const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
 
       const actor = await this.getActor(req);
-      const users = actor.role === "leader" ? await this.userRepository.findAll() : [];
-      const ownerIds = actor.role === "user"
-        ? [actor.id]
-        : actor.role === "leader"
-          ? users.filter((user) => user.teamId === actor.teamId).map((user) => user.id)
-          : undefined;
-      const tasks = await this.getTasksUseCase.execute({ limit, offset, ownerIds });
+      const tasks = await this.getTasksUseCase.execute(actor, { limit, offset });
       res.status(200).json(tasks);
     } catch (error) {
       next(error);

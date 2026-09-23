@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { CreateTask } from "../src/application/use-cases/CreateTask";
 import { InMemoryTaskRepository } from "../src/infrastructure/repositories/InMemoryTaskRepository";
+import { SystemClock } from "../src/infrastructure/services/SystemClock";
+import { UuidIdGenerator } from "../src/infrastructure/services/UuidIdGenerator";
 
 describe("CreateTask Use Case", () => {
   let repository: InMemoryTaskRepository;
@@ -8,7 +10,7 @@ describe("CreateTask Use Case", () => {
 
   beforeEach(() => {
     repository = new InMemoryTaskRepository();
-    useCase = new CreateTask(repository);
+    useCase = new CreateTask(repository, new UuidIdGenerator(), new SystemClock());
   });
 
   it("should successfully create and save a new task", async () => {

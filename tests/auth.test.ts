@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import bcrypt from "bcryptjs";
 import request from "supertest";
+import jwt from "jsonwebtoken";
+import { vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { LoginUser } from "../src/application/use-cases/LoginUser.js";
+import { User } from "../src/domain/entities/User.js";
 import { InMemoryTaskRepository } from "../src/infrastructure/repositories/InMemoryTaskRepository.js";
 import { InMemoryUserRepository } from "../src/infrastructure/repositories/InMemoryUserRepository.js";
 import { config } from "../src/infrastructure/config/env.js";
@@ -11,7 +16,7 @@ describe("Auth Integration Tests", () => {
 
   const testUser = {
     email: "testuser@example.com",
-    password: "password123",
+    password: "Password123!",
   };
 
   beforeAll(() => {
@@ -39,14 +44,23 @@ describe("Auth Integration Tests", () => {
     expect(res.body).toHaveProperty("error", "Email already in use");
   });
 
+  it("POST /auth/register - should reject weak passwords", async () => {
+    const res = await request(app)
+      .post("/auth/register")
+      .send({ email: "weakpass@example.com", password: "short" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty("error", "Password must be at least 8 characters long and include uppercase, lowercase, a number, and a special character.");
+  });
+
   it("POST /auth/register - should persist a leader role choice", async () => {
     await request(app)
       .post("/auth/register")
-      .send({ email: "leader@example.com", password: "password123", role: "leader" });
+      .send({ email: "leader@example.com", password: "Password123!", role: "leader" });
 
     const res = await request(app)
       .post("/auth/login")
-      .send({ email: "leader@example.com", password: "password123" });
+      .send({ email: "leader@example.com", password: "Password123!" });
 
     expect(res.status).toBe(200);
     expect(res.body.role).toBe("leader");
@@ -68,13 +82,16 @@ describe("Auth Integration Tests", () => {
 
   it("admin can manage roles and assign tasks while users cannot complete them", async () => {
     const adminEmail = config.ADMIN_EMAIL;
-    await request(app).post("/auth/register").send({ email: adminEmail, password: "password123" });
-    const adminLogin = await request(app).post("/auth/login").send({ email: adminEmail, password: "password123" });
+    const adminLogin = await request(app).post("/auth/login").send({ email: "admin", password: "AdminPass!123" });
     const adminToken = adminLogin.body.token;
+
+    expect(adminLogin.status).toBe(200);
+    expect(adminLogin.body.role).toBe("admin");
+    expect(adminLogin.body.email).toBe(adminEmail);
 
     const member = await request(app)
       .post("/auth/register")
-      .send({ email: "member@example.com", password: "password123" });
+      .send({ email: "member@example.com", password: "Password123!" });
 
     const roleUpdate = await request(app)
       .patch(`/api/admin/users/${member.body.id}`)
@@ -84,7 +101,7 @@ describe("Auth Integration Tests", () => {
 
     const invitee = await request(app)
       .post("/auth/register")
-      .send({ email: "invitee@example.com", password: "password123" });
+      .send({ email: "invitee@example.com", password: "Password123!" });
     const invite = await request(app)
       .patch(`/api/leader/users/${invitee.body.id}/team`)
       .set("Authorization", `Bearer ${adminToken}`)
@@ -94,7 +111,7 @@ describe("Auth Integration Tests", () => {
 
     const inviteeLogin = await request(app)
       .post("/auth/login")
-      .send({ email: "invitee@example.com", password: "password123" });
+      .send({ email: "invitee@example.com", password: "Password123!" });
     const pendingInvite = await request(app)
       .get("/api/team/invites")
       .set("Authorization", `Bearer ${inviteeLogin.body.token}`);
@@ -114,7 +131,7 @@ describe("Auth Integration Tests", () => {
 
     const memberLogin = await request(app)
       .post("/auth/login")
-      .send({ email: "member@example.com", password: "password123" });
+      .send({ email: "member@example.com", password: "Password123!" });
     const completion = await request(app)
       .patch(`/tasks/${task.body.id}/complete`)
       .set("Authorization", `Bearer ${memberLogin.body.token}`);
@@ -133,6 +150,63 @@ describe("Auth Integration Tests", () => {
   });
 
   // 2. LOGIN
+  it("POST /auth/login - should authenticate the seeded admin with username and password", async () => {
+    const res = await request(app)
+      .post("/auth/login")
+      .send({ email: "admin", password: "AdminPass!123" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe("admin");
+    expect(res.body.email).toBe("admin@example.com");
+  });
+
+  it("PATCH /tasks/:id/complete - should reject invalid roles that are not leader or admin", async () => {
+    const adminLogin = await request(app)
+      .post("/auth/login")
+      .send({ email: "admin", password: "AdminPass!123" });
+
+    const createdTask = await request(app)
+      .post("/tasks")
+      .set("Authorization", `Bearer ${adminLogin.body.token}`)
+      .send({ title: "Needs approval" });
+
+    const invalidToken = jwt.sign({ userId: "guest-user", role: "guest" }, config.JWT_SECRET, { expiresIn: "1d" });
+
+    const res = await request(app)
+      .patch(`/tasks/${createdTask.body.id}/complete`)
+      .set("Authorization", `Bearer ${invalidToken}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Only leader or admin roles can complete tasks");
+  });
+
+  it("LoginUser should delegate token creation to an injected TokenGenerator", async () => {
+    const userRepository = new InMemoryUserRepository();
+    const passwordHash = await bcrypt.hash("Password123!", 10);
+    const user = new User(
+      "user-123",
+      "delegate@example.com",
+      passwordHash,
+      new Date(),
+      "user",
+      null,
+      null,
+      null,
+      null,
+      [],
+      "delegate"
+    );
+    await userRepository.create(user);
+
+    const tokenGenerator = { createToken: vi.fn().mockReturnValue("delegate-token") };
+    const loginUser = new LoginUser(userRepository, tokenGenerator as never);
+
+    const result = await loginUser.execute({ email: user.email, password: "Password123!" });
+
+    expect(result.token).toBe("delegate-token");
+    expect(tokenGenerator.createToken).toHaveBeenCalledWith(user);
+  });
+
   it("POST /auth/login - should authenticate user and return JWT", async () => {
     const res = await request(app)
       .post("/auth/login")

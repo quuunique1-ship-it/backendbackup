@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AppConfig } from "../../domain/config/AppConfig";
 
 const envSchema = z.object({
   DATABASE_PATH: z.string().default("database.sqlite"),

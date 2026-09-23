@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import express, { Express, Request, Response } from "express";
+import bcrypt from "bcryptjs";
 import { exec } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -15,14 +16,24 @@ import { LoginUser } from "./application/use-cases/LoginUser.js";
 import { RegisterUser } from "./application/use-cases/RegisterUser.js";
 import { TaskRepositoryInterface } from "./domain/repositories/TaskRepositoryInterface.js";
 import { UserRepoInterface } from "./domain/repositories/UserRepoInterface.js";
+import { SystemClock } from "./infrastructure/services/SystemClock.js";
+import { UuidIdGenerator } from "./infrastructure/services/UuidIdGenerator.js";
+import { JwtTokenGenerator } from "./infrastructure/services/JwtTokenGenerator.js";
 import { InMemoryUserRepository } from "./infrastructure/repositories/InMemoryUserRepository.js";
 import { AuthController } from "./presentation/controllers/AuthController.js";
 import { TaskController } from "./presentation/controllers/TaskController.js";
 import { CreateTaskSchema, PaginationQuerySchema } from "./presentation/dtos/TaskDTOs.js";
 import { authMiddleware, requireRole, AuthenticatedRequest } from "./presentation/middleware/authMiddleware.js";
+import { DefaultTaskDeletionPolicy } from "./infrastructure/policies/DefaultTaskDeletionPolicy.js";
+import { DefaultTaskAccessPolicy } from "./infrastructure/policies/DefaultTaskAccessPolicy.js";
+import { DefaultPasswordPolicy } from "./infrastructure/policies/DefaultPasswordPolicy.js";
+import { MinimumLengthRule, UppercaseRule, LowercaseRule, NumberRule, SpecialCharacterRule } from "./infrastructure/policies/password-rules.js";
 import { errorHandler } from "./presentation/middleware/errorHandler.js";
 import { validate } from "./presentation/middleware/validate.js";
 import { RegisterSchema, LoginSchema } from "./presentation/schemas/AuthSchemas.js";
+import { config } from "./infrastructure/config/env.js";
+import { AppConfig } from "./domain/config/AppConfig.js";
+import { User } from "./domain/entities/User.js";
 
 const execAsync = promisify(exec);
 
@@ -1192,22 +1203,70 @@ function renderMainUi(activePage = "login"): string {
   </html>`;
 }
 
+async function ensureDefaultAdmin(userRepository: UserRepoInterface): Promise<void> {
+  const adminEmail = config.ADMIN_EMAIL;
+  const adminUsername = "admin";
+
+  const existingAdmin = await userRepository.findByEmail(adminEmail)
+    ?? await userRepository.findByUsername(adminUsername);
+
+  if (existingAdmin) {
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash("AdminPass!123", 10);
+  const adminUser = new User(
+    randomUUID(),
+    adminEmail,
+    passwordHash,
+    new Date(),
+    "admin",
+    null,
+    null,
+    null,
+    null,
+    [],
+    adminUsername
+  );
+
+  await userRepository.create(adminUser);
+}
+
 export function createApp(
   taskRepository: TaskRepositoryInterface,
   userRepository: UserRepoInterface = new InMemoryUserRepository()
 ): Express {
   const app = express();
+  const seedDefaultAdmin = ensureDefaultAdmin(userRepository);
 
   app.use(express.json());
+  app.use(async (_req, _res, next) => {
+    try {
+      await seedDefaultAdmin;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
 
-  const createTaskUseCase = new CreateTask(taskRepository);
+  const createTaskUseCase = new CreateTask(taskRepository, new UuidIdGenerator(), new SystemClock());
   const completeTaskUseCase = new CompleteTask(taskRepository, userRepository);
-  const deleteTaskUseCase = new DeleteTask(taskRepository);
+  const deleteTaskUseCase = new DeleteTask(taskRepository, new DefaultTaskDeletionPolicy());
   const getTasksUseCase = new GetTasks(taskRepository);
-  const getTaskByIdUseCase = new GetTaskById(taskRepository);
+  const getTaskByIdUseCase = new GetTaskById(taskRepository, new DefaultTaskAccessPolicy());
 
-  const registerUser = new RegisterUser(userRepository);
-  const loginUser = new LoginUser(userRepository);
+  const registerUser = new RegisterUser(
+    userRepository,
+    config as AppConfig,
+    new DefaultPasswordPolicy([
+      new MinimumLengthRule(8),
+      new UppercaseRule(),
+      new LowercaseRule(),
+      new NumberRule(),
+      new SpecialCharacterRule(),
+    ])
+  );
+  const loginUser = new LoginUser(userRepository, new JwtTokenGenerator(config.JWT_SECRET));
 
   const taskController = new TaskController(
     createTaskUseCase,

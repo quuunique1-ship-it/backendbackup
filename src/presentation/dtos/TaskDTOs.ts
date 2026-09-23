@@ -32,3 +32,13 @@ export const PaginationQuerySchema = z.object({
 
 export type CreateTaskDTO = z.infer<typeof CreateTaskSchema>["body"];
 export type PaginationQueryDTO = z.infer<typeof PaginationQuerySchema>["query"];
+
+export type TaskDTO = {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: Date;
+  ownerId: string | null;
+  createdByUserId: string | null;
+  completedByUserId: string | null;
+};

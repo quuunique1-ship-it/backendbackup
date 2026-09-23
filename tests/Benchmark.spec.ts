@@ -5,6 +5,8 @@ import { TaskModel } from "../src/infrastructure/database/TaskModel";
 import { TypeOrmTaskRepository } from "../src/infrastructure/database/TypeOrmTaskRepository";
 import { InMemoryTaskRepository } from "../src/infrastructure/repositories/InMemoryTaskRepository";
 import { CreateTask } from "../src/application/use-cases/CreateTask";
+import { SystemClock } from "../src/infrastructure/services/SystemClock";
+import { UuidIdGenerator } from "../src/infrastructure/services/UuidIdGenerator";
 
 describe("Performance Benchmark: Isolated vs Database", () => {
   const ITERATIONS = 100;
@@ -12,7 +14,7 @@ describe("Performance Benchmark: Isolated vs Database", () => {
   it("measures execution time: InMemory vs SQLite Database", async () => {
     // 1. Setup InMemory (Isolated)
     const inMemoryRepo = new InMemoryTaskRepository();
-    const isolatedUseCase = new CreateTask(inMemoryRepo);
+    const isolatedUseCase = new CreateTask(inMemoryRepo, new UuidIdGenerator(), new SystemClock());
 
     // 2. Setup TypeORM with SQLite (Database)
     const testDataSource = new DataSource({
@@ -25,7 +27,7 @@ describe("Performance Benchmark: Isolated vs Database", () => {
 
     const ormRepo = testDataSource.getRepository(TaskModel);
     const dbRepo = new TypeOrmTaskRepository(ormRepo);
-    const databaseUseCase = new CreateTask(dbRepo);
+    const databaseUseCase = new CreateTask(dbRepo, new UuidIdGenerator(), new SystemClock());
 
     // --- Benchmark Isolated (InMemory) ---
     const startMemory = performance.now();

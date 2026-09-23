@@ -3,22 +3,44 @@ import { TaskRepositoryInterface } from "../../domain/repositories/TaskRepositor
 import { Task } from "../../domain/entities/Task";
 import { NotFoundError } from "../../domain/errors/AppError";
 import { User } from "../../domain/entities/User";
-import { AppError } from "../../domain/errors/AppError";
+import { TaskAccessPolicy } from "../../domain/policies/TaskAccessPolicy";
+
+export interface GetTaskByIdDTO {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: Date;
+  ownerId: string | null;
+  createdByUserId: string | null;
+  completedByUserId: string | null;
+}
 
 export class GetTaskById {
-  constructor(private taskRepository: TaskRepositoryInterface) {}
+  constructor(
+    private taskRepository: TaskRepositoryInterface,
+    private taskAccessPolicy: TaskAccessPolicy
+  ) {}
 
-  async execute(id: string, actor: User): Promise<Task> {
+  async execute(id: string, actor: User): Promise<GetTaskByIdDTO> {
     const task = await this.taskRepository.findById(id);
 
     if (!task) {
       throw new NotFoundError(`Task with ID ${id} not found`);
     }
 
-    if (actor.role === "user" && task.ownerId !== actor.id) {
-      throw new AppError(403, "You can only view your own tasks");
+    const denial = this.taskAccessPolicy.canView(task, actor);
+    if (denial) {
+      throw denial;
     }
 
-    return task;
+    return {
+      id: task.id,
+      title: task.title,
+      completed: task.completed,
+      createdAt: task.createdAt,
+      ownerId: task.ownerId,
+      createdByUserId: task.createdByUserId,
+      completedByUserId: task.completedByUserId,
+    };
   }
 }

@@ -1,8 +1,7 @@
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { UserRepoInterface } from "../../domain/repositories/UserRepoInterface";
 import { AppError } from "../../domain/errors/AppError";
-import { config } from "../../infrastructure/config/env";
+import { TokenGenerator } from "../../domain/ports/TokenGenerator";
 
 export interface LoginUserDTO {
   email: string;
@@ -10,7 +9,10 @@ export interface LoginUserDTO {
 }
 
 export class LoginUser {
-  constructor(private readonly userRepository: UserRepoInterface) {}
+  constructor(
+    private readonly userRepository: UserRepoInterface,
+    private readonly tokenGenerator: TokenGenerator
+  ) {}
 
   async execute(dto: LoginUserDTO): Promise<{ token: string; email: string; username: string | null; role: string; teamId: string | null; notifications: string[] }> {
     const user = await this.userRepository.findByEmail(dto.email)
@@ -24,9 +26,7 @@ export class LoginUser {
       throw new AppError( 401,"Invalid credentials");
     }
 
-    const token = jwt.sign({ userId: user.id, role: user.role, teamId: user.teamId }, config.JWT_SECRET, {
-      expiresIn: "1d",
-    });
+    const token = this.tokenGenerator.createToken(user);
 
     const notifications = await this.userRepository.consumeNotifications(user.id);
     return { token, email: user.email, username: user.username, role: user.role, teamId: user.teamId, notifications };
