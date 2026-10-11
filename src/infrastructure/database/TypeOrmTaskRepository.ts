@@ -1,4 +1,4 @@
-import { Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
 import { Task } from "../../domain/entities/Task";
 import { TaskRepositoryInterface, PaginationOptions } from "../../domain/repositories/TaskRepositoryInterface";
 import { TaskModel } from "./TaskModel";
@@ -6,7 +6,6 @@ import { TaskModel } from "./TaskModel";
 export class TypeOrmTaskRepository implements TaskRepositoryInterface {
   constructor(private ormRepository: Repository<TaskModel>) {}
 
-  // Updated to return Promise<Task> to fulfill ITaskRepository contract
   async save(task: Task): Promise<Task> {
     const model = new TaskModel();
     model.id = task.id;
@@ -64,7 +63,16 @@ export class TypeOrmTaskRepository implements TaskRepositoryInterface {
     return task;
   }
 
-  async delete(id: string): Promise<void> {
-    await this.ormRepository.delete(id);
+  async delete(id: string, expectedOwnerId?: string | null): Promise<boolean> {
+    if (expectedOwnerId === undefined) {
+      const result = await this.ormRepository.delete(id);
+      return (result.affected ?? 0) > 0;
+    }
+
+    const result = expectedOwnerId === null
+      ? await this.ormRepository.delete({ id, ownerId: IsNull() })
+      : await this.ormRepository.delete({ id, ownerId: expectedOwnerId });
+
+    return (result.affected ?? 0) > 0;
   }
 }

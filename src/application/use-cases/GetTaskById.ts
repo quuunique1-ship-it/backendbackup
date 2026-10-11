@@ -4,6 +4,7 @@ import { Task } from "../../domain/entities/Task";
 import { NotFoundError } from "../../domain/errors/AppError";
 import { User } from "../../domain/entities/User";
 import { TaskAccessPolicy } from "../../domain/policies/TaskAccessPolicy";
+import { Logger, silentLogger } from "../ports/Logger.js";
 
 export interface GetTaskByIdDTO {
   id: string;
@@ -18,7 +19,8 @@ export interface GetTaskByIdDTO {
 export class GetTaskById {
   constructor(
     private taskRepository: TaskRepositoryInterface,
-    private taskAccessPolicy: TaskAccessPolicy
+    private taskAccessPolicy: TaskAccessPolicy,
+    private logger: Logger = silentLogger
   ) {}
 
   async execute(id: string, actor: User): Promise<GetTaskByIdDTO> {
@@ -32,6 +34,8 @@ export class GetTaskById {
     if (denial) {
       throw denial;
     }
+
+    this.logger.info({ taskId: task.id, userId: actor.id }, "Task retrieved successfully");
 
     return {
       id: task.id,

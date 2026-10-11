@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createApp = createApp;
 require("reflect-metadata");
 const express_1 = __importDefault(require("express"));
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const node_child_process_1 = require("node:child_process");
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
@@ -18,14 +19,29 @@ const GetTasks_js_1 = require("./application/use-cases/GetTasks.js");
 const GetTaskById_js_1 = require("./application/use-cases/GetTaskById.js");
 const LoginUser_js_1 = require("./application/use-cases/LoginUser.js");
 const RegisterUser_js_1 = require("./application/use-cases/RegisterUser.js");
+const KickUserFromTeam_js_1 = require("./application/use-cases/KickUserFromTeam.js");
+const SystemClock_js_1 = require("./infrastructure/services/SystemClock.js");
+const UuidIdGenerator_js_1 = require("./infrastructure/services/UuidIdGenerator.js");
+const JwtTokenGenerator_js_1 = require("./infrastructure/services/JwtTokenGenerator.js");
+const JwtTokenVerifier_js_1 = require("./infrastructure/services/JwtTokenVerifier.js");
 const InMemoryUserRepository_js_1 = require("./infrastructure/repositories/InMemoryUserRepository.js");
 const AuthController_js_1 = require("./presentation/controllers/AuthController.js");
 const TaskController_js_1 = require("./presentation/controllers/TaskController.js");
 const TaskDTOs_js_1 = require("./presentation/dtos/TaskDTOs.js");
 const authMiddleware_js_1 = require("./presentation/middleware/authMiddleware.js");
+const DefaultTaskDeletionPolicy_js_1 = require("./infrastructure/policies/DefaultTaskDeletionPolicy.js");
+const DefaultTaskAccessPolicy_js_1 = require("./infrastructure/policies/DefaultTaskAccessPolicy.js");
+const DefaultTaskCompletionPolicy_js_1 = require("./infrastructure/policies/DefaultTaskCompletionPolicy.js");
+const DefaultTeamAssignmentPolicy_js_1 = require("./infrastructure/policies/DefaultTeamAssignmentPolicy.js");
+const DefaultTeamMembershipPolicy_js_1 = require("./infrastructure/policies/DefaultTeamMembershipPolicy.js");
+const DefaultPasswordPolicy_js_1 = require("./infrastructure/policies/DefaultPasswordPolicy.js");
+const password_rules_js_1 = require("./infrastructure/policies/password-rules.js");
 const errorHandler_js_1 = require("./presentation/middleware/errorHandler.js");
 const validate_js_1 = require("./presentation/middleware/validate.js");
 const AuthSchemas_js_1 = require("./presentation/schemas/AuthSchemas.js");
+const env_js_1 = require("./infrastructure/config/env.js");
+const User_js_1 = require("./domain/entities/User.js");
+const PinoLogger_js_1 = require("./infrastructure/logging/PinoLogger.js");
 const execAsync = (0, node_util_1.promisify)(node_child_process_1.exec);
 function getTestFiles() {
     const testsDir = (0, node_path_1.join)(process.cwd(), "tests");
@@ -621,9 +637,9 @@ function renderMainUi(activePage = "login") {
             <a class="${page === "register" ? "active" : ""}" href="/ui/register">Register</a>
             <a class="${page === "login" ? "active" : ""}" href="/ui/login">Login</a>
             <a class="${page === "tasks" ? "active" : ""}" href="/ui/tasks">Tasks</a>
-            <a class="${page === "tests" ? "active" : ""}" data-role-link="admin" href="/ui/tests">Tests</a>
+            <a class="${page === "tests" ? "active" : ""}" data-role-link="admin" href="/ui/tests" hidden>Tests</a>
             <a class="${page === "team" ? "active" : ""}" href="/ui/team">Team</a>
-            <a class="${page === "admin" ? "active" : ""}" data-role-link="admin" href="/ui/admin">Admin</a>
+            <a class="${page === "admin" ? "active" : ""}" data-role-link="admin" href="/ui/admin" hidden>Admin</a>
             </nav>
             <div class="user-area">
               <button class="user-bubble" id="userBubble" type="button" aria-label="Open user menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="3.5"></circle><path d="M4.5 20c.7-3.4 3.3-5.5 7.5-5.5s6.8 2.1 7.5 5.5"></path></svg></button>
@@ -642,8 +658,9 @@ function renderMainUi(activePage = "login") {
       <script>
         const currentPage = '${page}';
         const state = { token: localStorage.getItem('taskToken') || '' };
+        const signedIn = Boolean(state.token);
         const userEmail = localStorage.getItem('taskEmail') || '';
-        const userRole = localStorage.getItem('taskRole') || 'user';
+        const userRole = signedIn ? (localStorage.getItem('taskRole') || 'user') : 'user';
         const notificationBox = document.getElementById('notificationBox');
         const notifications = JSON.parse(localStorage.getItem('taskNotifications') || '[]');
         if (notificationBox && notifications.length) {
@@ -662,7 +679,7 @@ function renderMainUi(activePage = "login") {
           localStorage.removeItem('taskNotifications');
         }
         const pageAllowed = currentPage === 'tests' || currentPage === 'admin'
-          ? userRole === 'admin'
+          ? signedIn && userRole === 'admin'
           : true;
         if (!pageAllowed) {
           window.location.replace('/ui/tasks');
@@ -681,7 +698,7 @@ function renderMainUi(activePage = "login") {
         };
         document.querySelectorAll('[data-role-link]').forEach((link) => {
           const requiredRole = link.dataset.roleLink;
-          const visible = requiredRole === 'admin' ? userRole === 'admin' : ['leader', 'admin'].includes(userRole);
+          const visible = signedIn && (requiredRole === 'admin' ? userRole === 'admin' : ['leader', 'admin'].includes(userRole));
           link.hidden = !visible;
         });
         document.querySelectorAll('[data-role-icon]').forEach((icon) => {
@@ -1188,19 +1205,61 @@ function renderMainUi(activePage = "login") {
     </body>
   </html>`;
 }
-function createApp(taskRepository, userRepository = new InMemoryUserRepository_js_1.InMemoryUserRepository()) {
+async function ensureDefaultAdmin(userRepository) {
+    const adminEmail = env_js_1.config.ADMIN_EMAIL;
+    const adminPassword = env_js_1.config.ADMIN_PASSWORD;
+    const adminUsername = "admin";
+    const existingAdmin = await userRepository.findByEmail(adminEmail)
+        ?? await userRepository.findByUsername(adminUsername);
+    if (existingAdmin) {
+        return;
+    }
+    const passwordHash = await bcryptjs_1.default.hash(adminPassword, 10);
+    const adminUser = new User_js_1.User((0, node_crypto_1.randomUUID)(), adminEmail, passwordHash, new Date(), "admin", null, null, null, null, [], adminUsername);
+    await userRepository.create(adminUser);
+}
+function createApp(taskRepository, userRepository = new InMemoryUserRepository_js_1.InMemoryUserRepository(), databasePing = async () => {
+    throw new Error("Database health check is not configured");
+}) {
     const app = (0, express_1.default)();
+    const seedDefaultAdmin = ensureDefaultAdmin(userRepository);
     app.use(express_1.default.json());
-    const createTaskUseCase = new CreateTask_js_1.CreateTask(taskRepository);
-    const completeTaskUseCase = new CompleteTask_js_1.CompleteTask(taskRepository, userRepository);
-    const deleteTaskUseCase = new DeleteTask_js_1.DeleteTask(taskRepository);
-    const getTasksUseCase = new GetTasks_js_1.GetTasks(taskRepository);
-    const getTaskByIdUseCase = new GetTaskById_js_1.GetTaskById(taskRepository);
-    const registerUser = new RegisterUser_js_1.RegisterUser(userRepository);
-    const loginUser = new LoginUser_js_1.LoginUser(userRepository);
-    const taskController = new TaskController_js_1.TaskController(createTaskUseCase, completeTaskUseCase, deleteTaskUseCase, getTasksUseCase, getTaskByIdUseCase, userRepository);
-    const authController = new AuthController_js_1.AuthController(registerUser, loginUser);
-    const authenticate = (0, authMiddleware_js_1.authMiddleware)(userRepository);
+    app.get("/health", async (_req, res) => {
+        try {
+            await databasePing();
+            res.status(200).json({ status: "ok" });
+        }
+        catch {
+            res.status(503).json({ status: "unavailable" });
+        }
+    });
+    app.use(async (_req, _res, next) => {
+        try {
+            await seedDefaultAdmin;
+            next();
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    const createTaskUseCase = new CreateTask_js_1.CreateTask(taskRepository, new UuidIdGenerator_js_1.UuidIdGenerator(), new SystemClock_js_1.SystemClock(), PinoLogger_js_1.logger);
+    const completeTaskUseCase = new CompleteTask_js_1.CompleteTask(taskRepository, userRepository, new DefaultTaskCompletionPolicy_js_1.DefaultTaskCompletionPolicy(), PinoLogger_js_1.logger);
+    const deleteTaskUseCase = new DeleteTask_js_1.DeleteTask(taskRepository, new DefaultTaskDeletionPolicy_js_1.DefaultTaskDeletionPolicy(), PinoLogger_js_1.logger);
+    const getTasksUseCase = new GetTasks_js_1.GetTasks(taskRepository, PinoLogger_js_1.logger);
+    const getTaskByIdUseCase = new GetTaskById_js_1.GetTaskById(taskRepository, new DefaultTaskAccessPolicy_js_1.DefaultTaskAccessPolicy(), PinoLogger_js_1.logger);
+    const teamAssignmentPolicy = new DefaultTeamAssignmentPolicy_js_1.DefaultTeamAssignmentPolicy();
+    const kickUserUseCase = new KickUserFromTeam_js_1.KickUserFromTeam(userRepository, new DefaultTeamMembershipPolicy_js_1.DefaultTeamMembershipPolicy(), PinoLogger_js_1.logger);
+    const registerUser = new RegisterUser_js_1.RegisterUser(userRepository, env_js_1.config, new DefaultPasswordPolicy_js_1.DefaultPasswordPolicy([
+        new password_rules_js_1.MinimumLengthRule(8),
+        new password_rules_js_1.UppercaseRule(),
+        new password_rules_js_1.LowercaseRule(),
+        new password_rules_js_1.NumberRule(),
+        new password_rules_js_1.SpecialCharacterRule(),
+    ]), PinoLogger_js_1.logger);
+    const loginUser = new LoginUser_js_1.LoginUser(userRepository, new JwtTokenGenerator_js_1.JwtTokenGenerator(env_js_1.config.JWT_SECRET), PinoLogger_js_1.logger);
+    const tokenVerifier = new JwtTokenVerifier_js_1.JwtTokenVerifier(env_js_1.config.JWT_SECRET);
+    const taskController = new TaskController_js_1.TaskController(createTaskUseCase, completeTaskUseCase, deleteTaskUseCase, getTasksUseCase, getTaskByIdUseCase, userRepository, PinoLogger_js_1.logger);
+    const authController = new AuthController_js_1.AuthController(registerUser, loginUser, PinoLogger_js_1.logger);
     const renderEntryPage = (_req, res) => {
         res.type("html").send(`<!DOCTYPE html>
       <html lang="en">
@@ -1246,7 +1305,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
     });
     app.post("/auth/register", (0, validate_js_1.validate)(AuthSchemas_js_1.RegisterSchema), authController.register);
     app.post("/auth/login", (0, validate_js_1.validate)(AuthSchemas_js_1.LoginSchema), authController.login);
-    app.get("/api/me", authenticate, async (req, res, next) => {
+    app.get("/api/me", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), async (req, res, next) => {
         try {
             const user = req.userId ? await userRepository.findById(req.userId) : null;
             if (!user) {
@@ -1259,7 +1318,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.get("/api/admin/users", authenticate, (0, authMiddleware_js_1.requireRole)("admin"), async (_req, res, next) => {
+    app.get("/api/admin/users", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("admin"), async (_req, res, next) => {
         try {
             const users = await userRepository.findAll();
             res.json(users.map(({ id, email, role, teamId, createdAt }) => ({ id, email, role, teamId, createdAt })));
@@ -1268,7 +1327,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.patch("/api/admin/users/:id", authenticate, (0, authMiddleware_js_1.requireRole)("admin"), async (req, res, next) => {
+    app.patch("/api/admin/users/:id", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("admin"), async (req, res, next) => {
         try {
             const role = req.body.role;
             const teamId = req.body.teamId ?? null;
@@ -1283,7 +1342,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.get("/api/leader/users", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
+    app.get("/api/leader/users", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
         try {
             const actor = req.userId ? await userRepository.findById(req.userId) : null;
             const users = await userRepository.findAll();
@@ -1298,7 +1357,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.get("/api/leader/candidates", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (_req, res, next) => {
+    app.get("/api/leader/candidates", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (_req, res, next) => {
         try {
             const users = await userRepository.findAll();
             res.json(users.filter((user) => user.role === "user" && !user.teamId && !user.pendingTeamId).map(({ id, email, role, teamId }) => ({ id, email, role, teamId })));
@@ -1307,7 +1366,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.post("/api/leader/team", authenticate, (0, authMiddleware_js_1.requireRole)("leader"), async (req, res, next) => {
+    app.post("/api/leader/team", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader"), async (req, res, next) => {
         try {
             const actor = req.userId ? await userRepository.findById(req.userId) : null;
             const teamName = typeof req.body.teamName === "string" ? req.body.teamName.trim() : "";
@@ -1330,7 +1389,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.get("/api/teams", authenticate, async (_req, res, next) => {
+    app.get("/api/teams", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), async (_req, res, next) => {
         try {
             const users = await userRepository.findAll();
             res.json(users.filter((user) => user.role === "leader" && user.teamId).map(({ teamId, teamName }) => ({ teamId, teamName: teamName || "Unnamed team" })));
@@ -1339,7 +1398,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.post("/api/teams/:teamId/requests", authenticate, async (req, res, next) => {
+    app.post("/api/teams/:teamId/requests", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), async (req, res, next) => {
         try {
             const user = req.userId ? await userRepository.findById(req.userId) : null;
             const team = (await userRepository.findAll()).find((candidate) => candidate.role === "leader" && candidate.teamId === req.params.teamId);
@@ -1362,7 +1421,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.get("/api/leader/requests", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
+    app.get("/api/leader/requests", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
         try {
             const actor = req.userId ? await userRepository.findById(req.userId) : null;
             const users = await userRepository.findAll();
@@ -1373,7 +1432,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.patch("/api/leader/requests/:id/accept", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
+    app.patch("/api/leader/requests/:id/accept", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
         try {
             const actor = req.userId ? await userRepository.findById(req.userId) : null;
             const target = await userRepository.findById(req.params.id);
@@ -1394,7 +1453,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.patch("/api/leader/users/:id/team", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
+    app.patch("/api/leader/users/:id/team", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
         try {
             const actor = req.userId ? await userRepository.findById(req.userId) : null;
             const target = await userRepository.findById(req.params.id);
@@ -1402,21 +1461,11 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
                 res.status(404).json({ error: "User not found" });
                 return;
             }
-            if (actor?.role === "leader" && target.role !== "user") {
-                res.status(403).json({ error: "Leaders can manage user accounts only" });
-                return;
-            }
-            if (actor?.role === "leader" && !actor.teamId) {
-                res.status(403).json({ error: "A leader must be assigned to a team first" });
-                return;
-            }
             const teamId = actor?.role === "admin" ? (req.body.teamId ?? null) : actor?.teamId ?? null;
-            if (!teamId) {
-                res.status(400).json({ error: "A team ID is required to send an invitation" });
-                return;
-            }
-            if (target.teamId && target.teamId !== teamId) {
-                res.status(400).json({ error: "User must leave their current team before joining another" });
+            const assignmentDenial = actor ? teamAssignmentPolicy.canAssignTeam(actor, target, teamId) : null;
+            if (assignmentDenial) {
+                const { mapDomainErrorToHttpStatus } = await import("./presentation/middleware/errorHandler.js");
+                res.status(mapDomainErrorToHttpStatus(assignmentDenial)).json({ error: assignmentDenial.message });
                 return;
             }
             const user = await userRepository.updateTeamInvite(target.id, target.teamId, teamId);
@@ -1426,7 +1475,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.get("/api/team/invites", authenticate, async (req, res, next) => {
+    app.get("/api/team/invites", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), async (req, res, next) => {
         try {
             const user = req.userId ? await userRepository.findById(req.userId) : null;
             if (!user) {
@@ -1439,7 +1488,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.post("/api/team/invites/accept", authenticate, async (req, res, next) => {
+    app.post("/api/team/invites/accept", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), async (req, res, next) => {
         try {
             const user = req.userId ? await userRepository.findById(req.userId) : null;
             if (!user) {
@@ -1472,7 +1521,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.post("/api/team/leave", authenticate, async (req, res, next) => {
+    app.post("/api/team/leave", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), async (req, res, next) => {
         try {
             const user = req.userId ? await userRepository.findById(req.userId) : null;
             if (!user || !user.teamId) {
@@ -1490,24 +1539,22 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.patch("/api/leader/users/:id/kick", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
+    app.patch("/api/leader/users/:id/kick", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
         try {
-            const actor = req.userId ? await userRepository.findById(req.userId) : null;
-            const target = await userRepository.findById(req.params.id);
-            if (!actor || !target || !target.teamId || (actor.role === "leader" && target.teamId !== actor.teamId)) {
-                res.status(403).json({ error: "You cannot remove this user" });
+            const actorId = req.userId;
+            const targetId = req.params.id;
+            if (!actorId) {
+                res.status(401).json({ error: "Authentication required" });
                 return;
             }
-            const oldTeamName = target.teamName;
-            const updated = await userRepository.leaveTeam(target.id);
-            await userRepository.addNotification(target.id, `leave|You were removed from ${oldTeamName || "the team"}.`);
-            res.json({ id: updated.id, teamId: updated.teamId });
+            const result = await kickUserUseCase.execute({ actorId, targetId });
+            res.json(result);
         }
         catch (error) {
             next(error);
         }
     });
-    app.delete("/api/teams/:teamId", authenticate, (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
+    app.delete("/api/teams/:teamId", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("leader", "admin"), async (req, res, next) => {
         try {
             const actor = req.userId ? await userRepository.findById(req.userId) : null;
             if (!actor || (actor.role === "leader" && actor.teamId !== req.params.teamId)) {
@@ -1521,7 +1568,7 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.delete("/api/admin/users/:id", authenticate, (0, authMiddleware_js_1.requireRole)("admin"), async (req, res, next) => {
+    app.delete("/api/admin/users/:id", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("admin"), async (req, res, next) => {
         try {
             const target = await userRepository.findById(req.params.id);
             if (!target) {
@@ -1535,16 +1582,16 @@ function createApp(taskRepository, userRepository = new InMemoryUserRepository_j
             next(error);
         }
     });
-    app.use("/tasks", authenticate);
+    app.use("/tasks", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier));
     app.post("/tasks", (0, validate_js_1.validate)(TaskDTOs_js_1.CreateTaskSchema), (req, res, next) => taskController.create(req, res, next));
     app.get("/tasks", (0, validate_js_1.validate)(TaskDTOs_js_1.PaginationQuerySchema), (req, res, next) => taskController.getAll(req, res, next));
     app.get("/tasks/:id", (req, res, next) => taskController.getById(req, res, next));
     app.patch("/tasks/:id/complete", (req, res, next) => taskController.complete(req, res, next));
     app.delete("/tasks/:id", (req, res, next) => taskController.delete(req, res, next));
-    app.get("/api/tests", authenticate, (0, authMiddleware_js_1.requireRole)("admin"), (_req, res) => {
+    app.get("/api/tests", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("admin"), (_req, res) => {
         res.json({ tests: getTestFiles() });
     });
-    app.post("/api/tests/run", authenticate, (0, authMiddleware_js_1.requireRole)("admin"), async (_req, res) => {
+    app.post("/api/tests/run", (0, authMiddleware_js_1.authMiddleware)(tokenVerifier), (0, authMiddleware_js_1.requireRole)("admin"), async (_req, res) => {
         try {
             const { stdout, stderr } = await execAsync("npx vitest run --reporter=default --maxWorkers=1", {
                 cwd: process.cwd(),

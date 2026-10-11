@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import express from "express";
 import bcrypt from "bcryptjs";
 import request from "supertest";
 import jwt from "jsonwebtoken";
@@ -6,6 +7,7 @@ import { vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { LoginUser } from "../src/application/use-cases/LoginUser.js";
 import { User } from "../src/domain/entities/User.js";
+import { authMiddleware } from "../src/presentation/middleware/authMiddleware.js";
 import { InMemoryTaskRepository } from "../src/infrastructure/repositories/InMemoryTaskRepository.js";
 import { InMemoryUserRepository } from "../src/infrastructure/repositories/InMemoryUserRepository.js";
 import { config } from "../src/infrastructure/config/env.js";
@@ -82,7 +84,8 @@ describe("Auth Integration Tests", () => {
 
   it("admin can manage roles and assign tasks while users cannot complete them", async () => {
     const adminEmail = config.ADMIN_EMAIL;
-    const adminLogin = await request(app).post("/auth/login").send({ email: "admin", password: "AdminPass!123" });
+    const adminPassword = config.ADMIN_PASSWORD;
+    const adminLogin = await request(app).post("/auth/login").send({ email: "admin", password: adminPassword });
     const adminToken = adminLogin.body.token;
 
     expect(adminLogin.status).toBe(200);
@@ -153,7 +156,7 @@ describe("Auth Integration Tests", () => {
   it("POST /auth/login - should authenticate the seeded admin with username and password", async () => {
     const res = await request(app)
       .post("/auth/login")
-      .send({ email: "admin", password: "AdminPass!123" });
+      .send({ email: "admin", password: config.ADMIN_PASSWORD });
 
     expect(res.status).toBe(200);
     expect(res.body.role).toBe("admin");
@@ -163,7 +166,7 @@ describe("Auth Integration Tests", () => {
   it("PATCH /tasks/:id/complete - should reject invalid roles that are not leader or admin", async () => {
     const adminLogin = await request(app)
       .post("/auth/login")
-      .send({ email: "admin", password: "AdminPass!123" });
+      .send({ email: "admin", password: config.ADMIN_PASSWORD });
 
     const createdTask = await request(app)
       .post("/tasks")
@@ -205,6 +208,23 @@ describe("Auth Integration Tests", () => {
 
     expect(result.token).toBe("delegate-token");
     expect(tokenGenerator.createToken).toHaveBeenCalledWith(user);
+  });
+
+  it("authMiddleware should delegate token verification to an injected TokenVerifier", async () => {
+    const testApp = express();
+    const tokenVerifier = { verify: vi.fn().mockReturnValue({ userId: "u-1", role: "admin", teamId: null }) };
+
+    testApp.use(authMiddleware(tokenVerifier as never));
+    testApp.get("/secure", (_req, res) => {
+      res.status(200).json({ ok: true });
+    });
+
+    const res = await request(testApp)
+      .get("/secure")
+      .set("Authorization", "Bearer token-from-verifier");
+
+    expect(res.status).toBe(200);
+    expect(tokenVerifier.verify).toHaveBeenCalledWith("token-from-verifier");
   });
 
   it("POST /auth/login - should authenticate user and return JWT", async () => {

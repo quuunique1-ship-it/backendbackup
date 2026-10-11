@@ -2,6 +2,7 @@ import { Task } from "../../domain/entities/Task";
 import { Clock } from "../../domain/ports/Clock";
 import { IdGenerator } from "../../domain/ports/IdGenerator";
 import { TaskRepositoryInterface } from "../../domain/repositories/TaskRepositoryInterface";
+import { Logger, silentLogger } from "../ports/Logger.js";
 
 export interface CreateTaskDTO {
   id: string;
@@ -17,7 +18,8 @@ export class CreateTask {
   constructor(
     private taskRepository: TaskRepositoryInterface,
     private idGenerator: IdGenerator,
-    private clock: Clock
+    private clock: Clock,
+    private logger: Logger = silentLogger
   ) {}
 
   async execute(title: string, ownerId = "system", createdByUserId = "system"): Promise<CreateTaskDTO> {
@@ -27,6 +29,10 @@ export class CreateTask {
     const newTask = Task.create(title, taskId, createdAt, ownerId, createdByUserId);
 
     const savedTask = await this.taskRepository.save(newTask);
+    this.logger.info(
+      { taskId: savedTask.id, userId: createdByUserId, ownerId: savedTask.ownerId },
+      "Task created successfully"
+    );
     return {
       id: savedTask.id,
       title: savedTask.title,
