@@ -1,5 +1,6 @@
 import { TaskRepositoryInterface } from "../../domain/repositories/TaskRepositoryInterface";
 import { User } from "../../domain/entities/User";
+import { Logger, silentLogger } from "../ports/Logger.js";
 
 export interface GetTasksDTO {
   id: string;
@@ -17,7 +18,7 @@ export interface GetTasksOptions {
 }
 
 export class GetTasks {
-  constructor(private taskRepository: TaskRepositoryInterface) {}
+  constructor(private taskRepository: TaskRepositoryInterface, private logger: Logger = silentLogger) {}
 
   async execute(actor: User, options?: GetTasksOptions): Promise<GetTasksDTO[]> {
     const limit = options?.limit ?? 10;
@@ -30,6 +31,8 @@ export class GetTasks {
       offset,
       ownerIds,
     });
+
+    this.logger.info({ userId: actor.id, taskCount: tasks.length, limit, offset }, "Tasks retrieved successfully");
 
     return tasks.map((task) => ({
       id: task.id,

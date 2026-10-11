@@ -33,8 +33,16 @@ class InMemoryTaskRepository {
             : this.tasks;
         return tasks.slice(offset, offset + limit);
     }
-    async delete(id) {
+    async delete(id, expectedOwnerId) {
+        const task = this.tasks.find((t) => t.id === id);
+        if (!task) {
+            return false;
+        }
+        if (expectedOwnerId !== undefined && task.ownerId !== expectedOwnerId) {
+            return false;
+        }
         this.tasks = this.tasks.filter((t) => t.id !== id);
+        return true;
     }
 }
 exports.InMemoryTaskRepository = InMemoryTaskRepository;

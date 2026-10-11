@@ -1,15 +1,30 @@
 {
-  "name": "codespaces-blank",
+  "name": "backendbackup",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
- "scripts": {
-  "build": "tsc",
-  "test": "vitest run"
-},
-  "keywords": [],
-  "author": "",
+  "description": "Secure task management API with JWT auth, role-based access control, and admin/team workflows for a portfolio project.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "typescript",
+    "express",
+    "jwt",
+    "task-management",
+    "backend",
+    "portfolio"
+  ],
+  "author": "Patrick",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quuunique1-ship-it/backendbackup"
+  },
+  "homepage": "https://github.com/quuunique1-ship-it/backendbackup",
+  "bugs": {
+    "url": "https://github.com/quuunique1-ship-it/backendbackup/issues"
+  },
   "type": "commonjs",
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -33,6 +48,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "pino": "^10.3.1",
     "reflect-metadata": "^0.2.2",
     "sqlite3": "^6.0.1",
     "typeorm": "^1.1.1",

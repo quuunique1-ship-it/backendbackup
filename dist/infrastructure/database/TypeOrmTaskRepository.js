@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TypeOrmTaskRepository = void 0;
+const typeorm_1 = require("typeorm");
 const Task_1 = require("../../domain/entities/Task");
 const TaskModel_1 = require("./TaskModel");
 class TypeOrmTaskRepository {
@@ -8,7 +9,6 @@ class TypeOrmTaskRepository {
     constructor(ormRepository) {
         this.ormRepository = ormRepository;
     }
-    // Updated to return Promise<Task> to fulfill ITaskRepository contract
     async save(task) {
         const model = new TaskModel_1.TaskModel();
         model.id = task.id;
@@ -19,7 +19,7 @@ class TypeOrmTaskRepository {
         model.createdByUserId = task.createdByUserId;
         model.completedByUserId = task.completedByUserId;
         const savedModel = await this.ormRepository.save(model);
-        return new Task_1.Task(savedModel.id, savedModel.title, savedModel.completed, savedModel.createdAt, savedModel.ownerId, savedModel.createdByUserId, savedModel.completedByUserId);
+        return Task_1.Task.fromPersistence(savedModel.id, savedModel.title, savedModel.completed, savedModel.createdAt, savedModel.ownerId, savedModel.createdByUserId, savedModel.completedByUserId);
     }
     async findAll(options) {
         const limit = options?.limit ?? 10;
@@ -32,13 +32,13 @@ class TypeOrmTaskRepository {
                 ? options.ownerIds.map((ownerId) => ({ ownerId }))
                 : undefined,
         });
-        return models.map((m) => new Task_1.Task(m.id, m.title, m.completed, m.createdAt, m.ownerId, m.createdByUserId, m.completedByUserId));
+        return models.map((m) => Task_1.Task.fromPersistence(m.id, m.title, m.completed, m.createdAt, m.ownerId, m.createdByUserId, m.completedByUserId));
     }
     async findById(id) {
         const model = await this.ormRepository.findOneBy({ id });
         if (!model)
             return null;
-        return new Task_1.Task(model.id, model.title, model.completed, model.createdAt, model.ownerId, model.createdByUserId, model.completedByUserId);
+        return Task_1.Task.fromPersistence(model.id, model.title, model.completed, model.createdAt, model.ownerId, model.createdByUserId, model.completedByUserId);
     }
     async update(task) {
         await this.ormRepository.update(task.id, {
@@ -48,8 +48,15 @@ class TypeOrmTaskRepository {
         });
         return task;
     }
-    async delete(id) {
-        await this.ormRepository.delete(id);
+    async delete(id, expectedOwnerId) {
+        if (expectedOwnerId === undefined) {
+            const result = await this.ormRepository.delete(id);
+            return (result.affected ?? 0) > 0;
+        }
+        const result = expectedOwnerId === null
+            ? await this.ormRepository.delete({ id, ownerId: (0, typeorm_1.IsNull)() })
+            : await this.ormRepository.delete({ id, ownerId: expectedOwnerId });
+        return (result.affected ?? 0) > 0;
     }
 }
 exports.TypeOrmTaskRepository = TypeOrmTaskRepository;

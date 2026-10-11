@@ -1,13 +1,17 @@
 import {Task} from "../../domain/entities/Task";
 import {TaskRepositoryInterface} from "../../domain/repositories/TaskRepositoryInterface"
 import { User } from "../../domain/entities/User";
-import { AppError } from "../../domain/errors/AppError";
+import { AppError, ValidationError } from "../../domain/errors/AppError";
 import { UserRepoInterface } from "../../domain/repositories/UserRepoInterface";
+import { TaskCompletionPolicy } from "../../domain/policies/TaskCompletionPolicy";
+import { Logger, silentLogger } from "../ports/Logger.js";
 
 export class CompleteTask {
     constructor(
         private taskRepository: TaskRepositoryInterface,
-        private userRepository: UserRepoInterface
+        private userRepository: UserRepoInterface,
+        private taskCompletionPolicy: TaskCompletionPolicy,
+        private logger: Logger = silentLogger
     ) {}
 
     async execute(id: string, actor: User): Promise<Task> {
@@ -17,30 +21,22 @@ export class CompleteTask {
         }
 
         if (!task.ownerId) {
-            throw new AppError(400, "task has no owner");
+            throw new ValidationError("task has no owner");
         }
 
         const owner = await this.userRepository.findById(task.ownerId);
         if (!owner) {
-            throw new AppError(400, "task has no owner");
+            throw new ValidationError("task has no owner");
         }
 
-        if (actor.role === "user") {
-            throw new AppError(403, "A leader or admin must approve task completion");
-        }
-
-        if (actor.role === "leader") {
-            if (!actor.teamId) {
-                throw new AppError(403, "A leader must be assigned to a team first");
-            }
-            if (owner.teamId !== actor.teamId) {
-                throw new AppError(403, "Leaders can only complete tasks assigned to their team");
-            }
-        } else if (actor.role !== "admin") {
-            throw new AppError(403, "Only leader or admin roles can complete tasks");
+        const denial = this.taskCompletionPolicy.canComplete(task, actor, owner);
+        if (denial) {
+            throw denial;
         }
 
         task.markAsCompleted(actor.id);
-        return await this.taskRepository.update(task);
+        const completedTask = await this.taskRepository.update(task);
+        this.logger.info({ taskId: completedTask.id, userId: actor.id }, "Task completed successfully");
+        return completedTask;
     }
 }

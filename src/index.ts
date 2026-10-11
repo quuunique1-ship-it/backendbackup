@@ -6,6 +6,7 @@ import { TaskModel } from "./infrastructure/database/TaskModel.js";
 import { TypeOrmTaskRepository } from "./infrastructure/database/TypeOrmTaskRepository.js";
 import { TypeOrmUserRepo } from "./infrastructure/database/TypeOrmUserRepo.js";
 import { UserModel } from "./infrastructure/database/UserModel.js";
+import { logger } from "./infrastructure/logging/PinoLogger.js";
 
 export const AppDataSource = new DataSource({
   type: "better-sqlite3",
@@ -17,7 +18,7 @@ export const AppDataSource = new DataSource({
 
 async function bootstrap() {
   await AppDataSource.initialize();
-  console.log(`Database connected successfully (${config.DATABASE_PATH})!`);
+  logger.info({ databasePath: config.DATABASE_PATH }, "Database connected successfully");
 
   const existingUsers = await AppDataSource.query("SELECT id, email, username FROM users");
   const usedUsernames = new Set<string>(existingUsers.map((user: { username: string | null }) => user.username).filter(Boolean));
@@ -34,11 +35,11 @@ async function bootstrap() {
   const taskRepository = new TypeOrmTaskRepository(AppDataSource.getRepository(TaskModel));
   const userRepository = new TypeOrmUserRepo(AppDataSource.getRepository(UserModel));
 
-  const app = createApp(taskRepository, userRepository);
+  const app = createApp(taskRepository, userRepository, () => AppDataSource.query("SELECT 1"));
 
   app.listen(config.PORT, () => {
-    console.log(`Server listening in ${config.NODE_ENV} mode at http://localhost:${config.PORT}`);
+    logger.info({ environment: config.NODE_ENV, appUrl: config.APP_URL }, "Server listening");
   });
 }
 
-bootstrap().catch((err) => console.error("Error starting server:", err));
+bootstrap().catch((err) => logger.error({ err }, "Application startup failed"));

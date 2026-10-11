@@ -6,6 +6,7 @@ import { GetTasks } from "../../application/use-cases/GetTasks";
 import { GetTaskById } from "../../application/use-cases/GetTaskById";
 import { User, UserRole } from "../../domain/entities/User";
 import { UserRepoInterface } from "../../domain/repositories/UserRepoInterface";
+import { Logger, silentLogger } from "../../application/ports/Logger.js";
 import { AuthenticatedRequest } from "../middleware/authMiddleware";
 
 export class TaskController {
@@ -15,8 +16,16 @@ export class TaskController {
     private deleteTaskUseCase: DeleteTask,
     private getTasksUseCase: GetTasks,
     private getTaskByIdUseCase: GetTaskById,
-    private userRepository: UserRepoInterface
+    private userRepository: UserRepoInterface,
+    private logger: Logger = silentLogger
   ) {}
+
+  private logFailure(error: unknown, operation: string, req: AuthenticatedRequest): void {
+    this.logger.warn(
+      { err: error, userId: req.userId, taskId: req.params.id },
+      `${operation} request failed`
+    );
+  }
 
   private async getActor(req: AuthenticatedRequest): Promise<User> {
     const user = req.userId ? await this.userRepository.findById(req.userId) : null;
@@ -35,6 +44,7 @@ export class TaskController {
       const task = await this.createTaskUseCase.execute(req.body.title, ownerId, actor.id);
       res.status(201).json(task);
     } catch (error) {
+      this.logFailure(error, "Create task", req);
       next(error);
     }
   }
@@ -48,6 +58,7 @@ export class TaskController {
       const tasks = await this.getTasksUseCase.execute(actor, { limit, offset });
       res.status(200).json(tasks);
     } catch (error) {
+      this.logFailure(error, "List tasks", req);
       next(error);
     }
   }
@@ -60,6 +71,7 @@ export class TaskController {
       const task = await this.getTaskByIdUseCase.execute(id, await this.getActor(req));
       res.status(200).json(task);
     } catch (error) {
+      this.logFailure(error, "Get task", req);
       next(error);
     }
   }
@@ -70,6 +82,7 @@ export class TaskController {
       const task = await this.completeTaskUseCase.execute(id, await this.getActor(req));
       res.status(200).json(task);
     } catch (error) {
+      this.logFailure(error, "Complete task", req);
       next(error);
     }
   }
@@ -80,6 +93,7 @@ export class TaskController {
       await this.deleteTaskUseCase.execute(id, await this.getActor(req));
       res.status(204).send();
     } catch (error) {
+      this.logFailure(error, "Delete task", req);
       next(error);
     }
   }

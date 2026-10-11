@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TaskController = void 0;
 const User_1 = require("../../domain/entities/User");
+const Logger_js_1 = require("../../application/ports/Logger.js");
 class TaskController {
     createTaskUseCase;
     completeTaskUseCase;
@@ -9,13 +10,18 @@ class TaskController {
     getTasksUseCase;
     getTaskByIdUseCase;
     userRepository;
-    constructor(createTaskUseCase, completeTaskUseCase, deleteTaskUseCase, getTasksUseCase, getTaskByIdUseCase, userRepository) {
+    logger;
+    constructor(createTaskUseCase, completeTaskUseCase, deleteTaskUseCase, getTasksUseCase, getTaskByIdUseCase, userRepository, logger = Logger_js_1.silentLogger) {
         this.createTaskUseCase = createTaskUseCase;
         this.completeTaskUseCase = completeTaskUseCase;
         this.deleteTaskUseCase = deleteTaskUseCase;
         this.getTasksUseCase = getTasksUseCase;
         this.getTaskByIdUseCase = getTaskByIdUseCase;
         this.userRepository = userRepository;
+        this.logger = logger;
+    }
+    logFailure(error, operation, req) {
+        this.logger.warn({ err: error, userId: req.userId, taskId: req.params.id }, `${operation} request failed`);
     }
     async getActor(req) {
         const user = req.userId ? await this.userRepository.findById(req.userId) : null;
@@ -35,6 +41,7 @@ class TaskController {
             res.status(201).json(task);
         }
         catch (error) {
+            this.logFailure(error, "Create task", req);
             next(error);
         }
     }
@@ -43,16 +50,11 @@ class TaskController {
             const limit = req.query.limit === undefined ? 10 : Number(req.query.limit);
             const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
             const actor = await this.getActor(req);
-            const users = actor.role === "leader" ? await this.userRepository.findAll() : [];
-            const ownerIds = actor.role === "user"
-                ? [actor.id]
-                : actor.role === "leader"
-                    ? users.filter((user) => user.teamId === actor.teamId).map((user) => user.id)
-                    : undefined;
-            const tasks = await this.getTasksUseCase.execute({ limit, offset, ownerIds });
+            const tasks = await this.getTasksUseCase.execute(actor, { limit, offset });
             res.status(200).json(tasks);
         }
         catch (error) {
+            this.logFailure(error, "List tasks", req);
             next(error);
         }
     }
@@ -64,6 +66,7 @@ class TaskController {
             res.status(200).json(task);
         }
         catch (error) {
+            this.logFailure(error, "Get task", req);
             next(error);
         }
     }
@@ -74,6 +77,7 @@ class TaskController {
             res.status(200).json(task);
         }
         catch (error) {
+            this.logFailure(error, "Complete task", req);
             next(error);
         }
     }
@@ -84,6 +88,7 @@ class TaskController {
             res.status(204).send();
         }
         catch (error) {
+            this.logFailure(error, "Delete task", req);
             next(error);
         }
     }
